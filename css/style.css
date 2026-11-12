@@ -386,3 +386,86 @@ dl.facts-grid dd { margin: 0; }
 .unlock-card .toggle { justify-content: center; margin: 0; font-weight: 400; color: var(--ink-2); }
 .unlock-card .btn { padding: 10px 14px; font-size: 15px; }
 .unlock-error { color: var(--badge-lead-ink); background: var(--badge-lead-bg); border-radius: 8px; padding: 6px 10px; font-size: 14px; }
+
+/* ---------- family editing (large print, one step at a time) ---------- */
+.btn-edit-big {
+  display: block; width: 100%; margin: 14px 0 4px; padding: 13px 16px; font-size: 17px; font-weight: 600;
+  background: var(--surface-2); border: 2px solid var(--accent); color: var(--accent); border-radius: 12px; text-align: center;
+}
+.btn-edit-big:hover { background: var(--accent); color: var(--accent-ink); }
+.editor-modal { z-index: 90; }
+.editor-card { width: min(680px, 100%); padding: 0; display: flex; flex-direction: column; font-size: 19px; line-height: 1.5; }
+.editor-body { padding: 26px 34px 30px; overflow: auto; }
+.ef-close {
+  align-self: flex-end; margin: 12px 14px 0 0; border: 1px solid var(--rule-2); background: var(--surface-2); color: var(--ink);
+  border-radius: 10px; padding: 8px 14px; font-size: 16px; font-weight: 600; cursor: pointer;
+}
+.ef-close:hover { border-color: var(--ink-3); }
+.editor-body h2 { font-size: 36px; line-height: 1.15; margin: 0 0 10px; }
+.editor-body .eyebrow { font-size: 14px; }
+.ef-lede { font-size: 19px; color: var(--ink-2); margin: 0 0 18px; }
+.ef-big-list { display: flex; flex-direction: column; gap: 10px; margin: 0 0 18px; }
+.ef-big {
+  display: flex; align-items: center; gap: 16px; text-align: left; width: 100%; min-height: 66px; padding: 12px 18px;
+  border: 2px solid var(--rule-2); border-radius: 14px; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 19px; cursor: pointer;
+}
+.ef-big:hover:not([disabled]), .ef-big:focus-visible { border-color: var(--accent); background: var(--surface); box-shadow: var(--shadow); }
+.ef-big[disabled] { opacity: .5; cursor: not-allowed; }
+.ef-big strong { display: block; font-weight: 600; }
+.ef-big small { display: block; font-size: 15px; color: var(--ink-3); }
+.ef-big-icon { font-size: 28px; width: 38px; text-align: center; flex: none; }
+.ef-field { margin: 0 0 18px; }
+.ef-field > label { display: block; font-weight: 600; font-size: 19px; margin-bottom: 6px; }
+.ef-help { margin: -2px 0 8px; font-size: 16px; color: var(--ink-2); }
+.ef-field input, .ef-field textarea {
+  width: 100%; font: inherit; font-size: 20px; padding: 12px 14px; border: 2px solid var(--rule-2); border-radius: 10px;
+  background: var(--surface); color: var(--ink);
+}
+.ef-field textarea { resize: vertical; line-height: 1.5; }
+.ef-field input:focus, .ef-field textarea:focus { outline: 3px solid color-mix(in srgb, var(--focus) 45%, transparent); border-color: var(--focus); }
+.ef-date-hint { margin: 6px 0 0; font-size: 16px; color: var(--line-brooks); font-weight: 600; min-height: 1em; }
+.ef-date-hint.unsure { color: var(--ink-2); font-weight: 400; }
+.ef-group { border: 1px solid var(--rule); border-radius: 14px; padding: 12px 18px 2px; margin: 0 0 18px; }
+.ef-group legend { font-family: var(--serif); font-size: 24px; font-weight: 700; padding: 0 6px; }
+.ef-choices { display: flex; flex-wrap: wrap; gap: 10px; }
+.ef-choice {
+  flex: 1 1 150px; min-height: 58px; padding: 10px 16px; font: inherit; font-size: 19px; font-weight: 600; cursor: pointer;
+  border: 2px solid var(--rule-2); border-radius: 12px; background: var(--surface-2); color: var(--ink);
+}
+.ef-choice:hover { border-color: var(--accent); }
+.ef-choice.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ef-choice.on::before { content: "✓ "; }
+.ef-you { border-top: 1px solid var(--rule); padding-top: 18px; margin-top: 8px; }
+.ef-note { background: var(--badge-likely-bg); color: var(--badge-likely-ink); border-radius: 12px; padding: 12px 16px; font-size: 17px; margin: 0 0 18px; }
+.ef-error { background: var(--badge-lead-bg); color: var(--badge-lead-ink); border-radius: 12px; padding: 12px 16px; font-size: 18px; font-weight: 600; margin: 0 0 16px; }
+.ef-foot { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-top: 10px; }
+.ef-foot .btn, .ef-buttons .btn, .ef-back { font-size: 18px; padding: 12px 18px; border-radius: 12px; min-height: 54px; }
+.ef-main { font-weight: 700; min-width: 160px; }
+.ef-link { border: 0; background: transparent; text-decoration: underline; color: var(--accent); font-size: 17px; padding: 8px 4px; }
+.ef-center { text-align: center; padding: 20px 0 10px; }
+.ef-buttons { display: flex; flex-direction: column; gap: 12px; align-items: stretch; max-width: 360px; margin: 22px auto 0; }
+.ef-check { width: 84px; height: 84px; border-radius: 50%; margin: 0 auto 14px; display: grid; place-items: center; font-size: 46px; font-weight: 700; background: var(--line-brooks); color: #fff; }
+.ef-check.ef-bad { background: var(--badge-lead-ink); }
+.ef-spinner { width: 64px; height: 64px; margin: 10px auto 18px; border-radius: 50%; border: 7px solid var(--rule); border-top-color: var(--accent); animation: efspin 1s linear infinite; }
+@keyframes efspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .ef-spinner { animation-duration: 3s; } }
+.ef-review { background: var(--surface-2); border: 1px solid var(--rule); border-radius: 14px; padding: 16px 20px; margin: 0 0 18px; }
+.ef-sentence { font-size: 21px; margin: 0 0 10px; }
+.ef-review dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0 0 8px; }
+.ef-review dt { color: var(--ink-2); }
+.ef-review dd { margin: 0; font-weight: 600; }
+.ef-review blockquote { margin: 0 0 8px; padding: 10px 14px; border-left: 4px solid var(--accent); background: var(--surface); border-radius: 6px; }
+.ef-diff { border-collapse: collapse; width: 100%; margin-bottom: 8px; }
+.ef-diff th { text-align: left; color: var(--ink-2); font-weight: 500; padding: 6px 10px 6px 0; vertical-align: top; }
+.ef-diff td { padding: 6px 6px; vertical-align: top; }
+.ef-old { color: var(--ink-3); text-decoration: line-through; }
+.ef-new { font-weight: 700; }
+.ef-changes { list-style: none; padding: 0; margin: 0 0 16px; }
+.ef-changes li { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--rule); }
+.ef-changes .btn { font-size: 16px; padding: 8px 14px; }
+.ef-confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 16px; }
+@media (max-width: 600px) {
+  .editor-body { padding: 16px 16px 22px; }
+  .editor-body h2 { font-size: 29px; }
+  .ef-foot { flex-direction: column-reverse; align-items: stretch; }
+}

@@ -1026,6 +1026,9 @@
     if (id !== state.root) actions.push(`<button type="button" class="btn btn-small btn-primary" data-reroot="${esc(id)}">View tree as ${esc(firstName(p))}</button>`);
     if (locate(id)) actions.push(`<button type="button" class="btn btn-small" data-show="${esc(id)}">Show in chart</button>`);
     if (actions.length) h += `<div class="p-actions">${actions.join('')}</div>`;
+    if (editingOn() && !minor) {
+      h += `<button type="button" class="btn btn-edit-big" data-edit="${esc(id)}">✎ Add or fix something about ${esc(firstName(p))}</button>`;
+    }
 
     if (minor) {
       h += `<div class="redacted-note">Details aren't shown for children. Only the name appears in this tree.</div>`;
@@ -1161,10 +1164,14 @@
       const rr = e.target.closest('[data-reroot]');
       if (rr) { setRoot(rr.dataset.reroot); go('tree'); return; }
       const sh = e.target.closest('[data-show]');
-      if (sh) { showInChart(sh.dataset.show); if (window.innerWidth < 700) closePanel(); }
+      if (sh) { showInChart(sh.dataset.show); if (window.innerWidth < 700) closePanel(); return; }
+      const ed = e.target.closest('[data-edit]');
+      if (ed) { openEditor({ personId: ed.dataset.edit }); return; }
+      if (e.target.closest('[data-edit-story]')) openEditor({ action: 'story' });
     });
     document.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
+      if (!$('#editor').hidden) { if (!editor.busy) closeEditor(); return; }
       if (!$('#settings').hidden) { $('#settings').hidden = true; return; }
       if (!$('#picker').hidden && state.root) { closePicker(); return; }
       if ($('#panel').classList.contains('open')) closePanel();
@@ -1177,7 +1184,8 @@
     const stories = state.data.stories || [];
     const book = stories.map((s) => s.source).find((s) => s && /History of the Stemen Family/i.test(s.title || ''));
     let h = `<div class="page-inner"><p class="eyebrow">Stories</p><h1>Family stories</h1>` +
-      `<p class="lede">Short histories drawn from the 1881 family history, obituaries, and memorial pages. Click a name to open that person.</p>`;
+      `<p class="lede">Short histories drawn from the 1881 family history, obituaries, memorial pages, and memories shared by the family. Click a name to open that person.</p>`;
+    if (editingOn()) h += `<p><button type="button" class="btn btn-edit-big" data-edit-story="1">✎ Share a memory or story</button></p>`;
     if (book) {
       h += `<div class="feature"><div class="f-icon">1881</div><div><h3>History of the Stemen Family</h3>` +
         `<p>C. B. Stemen's history, read at the family reunion at Enslen's Grove, Allen County, Ohio, May 28, 1881. The scanned book is free to read in the FamilySearch digital library (sign-in may be required).</p>` +
@@ -1252,7 +1260,11 @@
   // PBKDF2-SHA256 -> 64 bytes (AES-256 key + HMAC key), AES-CBC data, HMAC-SHA256 over iv+ct.
   const KEY_STORE = 'ft-key';
   const b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
-  const b64e = (u8) => btoa(String.fromCharCode.apply(null, Array.from(u8)));
+  const b64e = (u8) => {
+    let s = '';
+    for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    return btoa(s);
+  };
   async function deriveKeyBits(password, enc) {
     const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
     const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt: b64d(enc.salt), iterations: enc.iter }, base, 512);
@@ -1278,8 +1290,9 @@
     try {
       const saved = JSON.parse(store.get(KEY_STORE) || 'null');
       if (saved && saved.salt === enc.salt) {
-        const data = await decryptWith(b64d(saved.key), enc);
-        if (data) return data;
+        const bits = b64d(saved.key);
+        const data = await decryptWith(bits, enc);
+        if (data) { state.keyBits = bits; state.enc = enc; return data; }
       }
     } catch (e) { /* fall through to the prompt */ }
 
@@ -1298,6 +1311,7 @@
           const data = await decryptWith(bits, enc);
           if (!data) throw new Error('bad password');
           if ($('#unlock-remember').checked) store.set(KEY_STORE, JSON.stringify({ salt: enc.salt, key: b64e(bits) }));
+          state.keyBits = bits; state.enc = enc;
           input.value = '';
           modal.hidden = true;
           resolve(data);
@@ -1310,6 +1324,661 @@
         }
       });
     });
+  }
+
+  // ------------------------------------------------------------------ family editing
+  // Anyone with the password can add people, fix details and share memories.
+  // The GitHub key that saves changes lives inside the encrypted data
+  // (meta.editing, put there by tools/encrypt.ps1). A save fetches the newest
+  // encrypted file from GitHub, decrypts it with the key already derived from
+  // the password, applies one change, re-encrypts it (same salt, new IV) and
+  // commits it back. Every change is logged in data.changes with what's needed
+  // to undo it.
+  const ED_NAME = 'ft-editor-name';
+  const editingOn = () => !!(state.data && state.data.meta && state.data.meta.editing && state.data.meta.editing.token && state.keyBits);
+  const editor = { busy: false };
+
+  function reindex(data) {
+    ['byId', 'childrenOf', 'partnersOf', 'branch', 'ancCache', 'relCache'].forEach((k) => state[k].clear());
+    index(data);
+    if (state.root && !P(state.root)) state.root = data.meta.rootPerson;
+    renderChart();
+    renderStories();
+    if (state.panelId) { if (P(state.panelId)) openPanel(state.panelId, { noScroll: true }); else closePanel(); }
+  }
+
+  // ---- dates typed by people: "June 3, 1925", "6/3/1925", "1925", "about 1850"
+  function parseDate(text) {
+    const s = String(text || '').trim().replace(/\s+/g, ' ');
+    if (!s) return { value: null, label: '' };
+    const mon = (w) => {
+      const i = MONTHS.findIndex((m) => m.toLowerCase().startsWith(w.toLowerCase().replace(/\.$/, '').slice(0, 3)));
+      return w.replace(/\.$/, '').length >= 3 ? i : -1;
+    };
+    const iso = (y, m, d) => {
+      if (m != null && (m < 0 || m > 11)) return null;
+      if (d != null && (d < 1 || d > 31)) return null;
+      return y + (m != null ? '-' + String(m + 1).padStart(2, '0') : '') + (d != null ? '-' + String(d).padStart(2, '0') : '');
+    };
+    const ok = (v) => v ? { value: v, label: fmtDate(v) } : null;
+    let m, r;
+    const approx = s.match(/^(about|abt\.?|around|circa|ca\.?|c\.|before|bef\.?|after|aft\.?)\s+(.*)$/i);
+    if (approx) {
+      const inner = parseDate(approx[2]);
+      const word = /^(before|bef)/i.test(approx[1]) ? 'before' : /^(after|aft)/i.test(approx[1]) ? 'after' : 'about';
+      const v = inner.value ? `${word} ${inner.label}` : s;
+      return { value: v, label: v };
+    }
+    if ((m = s.match(/^(\d{4})$/))) return ok(m[1]);
+    if ((m = s.match(/^(\d{4})-(\d{1,2})(?:-(\d{1,2}))?$/)) && (r = ok(iso(m[1], +m[2] - 1, m[3] ? +m[3] : null)))) return r;
+    if ((m = s.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/)) && (r = ok(iso(m[3], +m[1] - 1, +m[2])))) return r;
+    if ((m = s.match(/^(\d{1,2})[/.-](\d{4})$/)) && (r = ok(iso(m[2], +m[1] - 1, null)))) return r;
+    if ((m = s.match(/^([A-Za-z.]+) (\d{1,2})(?:st|nd|rd|th)?,? (\d{4})$/)) && mon(m[1]) >= 0 && (r = ok(iso(m[3], mon(m[1]), +m[2])))) return r;
+    if ((m = s.match(/^(\d{1,2})(?:st|nd|rd|th)? (?:of )?([A-Za-z.]+),? (\d{4})$/)) && mon(m[2]) >= 0 && (r = ok(iso(m[3], mon(m[2]), +m[1])))) return r;
+    if ((m = s.match(/^([A-Za-z.]+),? (\d{4})$/)) && mon(m[1]) >= 0 && (r = ok(iso(m[2], mon(m[1]), null)))) return r;
+    return { value: s, label: s, unsure: true };
+  }
+  const shown = (v) => v ? fmtDate(v) : '';
+
+  // ---- applying one change to a copy of the data
+  function slugify(s) {
+    return norm(s).replace(/[^a-z0-9 ]/g, '').trim().replace(/ +/g, '-').slice(0, 40) || 'person';
+  }
+  function newId(data, name) {
+    const base = slugify(name);
+    let id = base, n = 2;
+    while (data.people.some((p) => p.id === id)) id = `${base}-${n++}`;
+    return id;
+  }
+  const REL_WORD = {
+    parent: { M: 'father', F: 'mother', _: 'parent' },
+    child: { M: 'son', F: 'daughter', _: 'child' },
+    sibling: { M: 'brother', F: 'sister', _: 'brother or sister' },
+    spouse: { M: 'husband', F: 'wife', _: 'husband or wife' }
+  };
+  const relWord = (rel, sex) => REL_WORD[rel][sex] || REL_WORD[rel]._;
+  const today = () => new Date().toISOString().slice(0, 10);
+  const firstOf = (p) => p ? firstName(p) : '';
+
+  function makePerson(data, f, anchor, gen, who, rel) {
+    const yr = (d) => parseInt((String(d || '').match(/\d{4}/) || [])[0], 10);
+    const by = yr(f.bdate);
+    let living = f.living === 'yes' ? true : f.living === 'no' ? false : null;
+    if (living === null) {
+      // "Not sure": guess from the birth year, or from the relative's.
+      const ay = yr(anchor.birth && anchor.birth.date);
+      const est = by || (ay ? ay + (rel === 'parent' ? -30 : rel === 'child' ? 30 : 0) : 0);
+      living = est ? est >= 1925 : !!anchor.living && rel !== 'parent';
+    }
+    const p = {
+      id: newId(data, f.name), name: f.name.trim(), nickname: (f.nickname || '').trim() || null,
+      sex: f.sex || null, living, status: 'confirmed',
+      birth: { date: f.bdate || null, place: (f.bplace || '').trim() || null },
+      death: { date: living ? null : (f.ddate || null), place: living ? null : ((f.dplace || '').trim() || null) },
+      burial: null, parents: [], spouses: [], children: [], siblings: [], residences: [],
+      occupation: null, religion: null, military: null, biography: (f.notes || '').trim(),
+      facts: [], gravestone: null,
+      sources: [{ title: `Added by ${who} on the family site, ${fmtDate(today())}` }],
+      openQuestions: [], generation: gen, line: anchor.line, relationship: null, addedBy: who
+    };
+    if (living && by && new Date().getFullYear() - by < 18) p.minor = true;
+    data.people.push(p);
+    return p;
+  }
+
+  function applyOp(data, op, who) {
+    data.people = data.people || [];
+    data.stories = data.stories || [];
+    data.changes = data.changes || [];
+    const find = (id) => data.people.find((p) => p.id === id);
+    const before = new Map(data.people.map((p) => [p.id, JSON.stringify(p)]));
+    const storiesBefore = new Set(data.stories.map((s) => s.id));
+    const entry = {
+      id: 'c' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      when: new Date().toISOString(), by: who, type: op.type, summary: '', focus: null
+    };
+
+    if (op.type === 'add') {
+      const a = find(op.anchor);
+      if (!a) throw new Error('That person is no longer in the tree.');
+      a.parents = a.parents || []; a.spouses = a.spouses || []; a.children = a.children || []; a.siblings = a.siblings || [];
+      const f = op.person;
+      const g = typeof a.generation === 'number' ? a.generation : 0;
+      const word = relWord(op.rel, f.sex);
+      if (op.rel === 'sibling' && !a.parents.some(find)) {
+        const yrs = [yearOf(f.bdate), f.living === 'yes' ? '' : yearOf(f.ddate)].filter(Boolean).join('–');
+        a.siblings.push(f.name.trim() + (yrs ? ` (${yrs})` : ''));
+        entry.focus = a.id;
+      } else {
+        const gen = op.rel === 'parent' ? g + 1 : op.rel === 'child' ? g - 1 : g;
+        const p = makePerson(data, f, a, gen, who, op.rel);
+        entry.focus = p.id;
+        if (op.rel === 'parent') {
+          const other = a.parents.map(find).filter(Boolean)[0];
+          a.parents.push(p.id);
+          p.children.push({ id: a.id });
+          if (other) {
+            p.spouses.push({ id: other.id });
+            other.spouses = other.spouses || [];
+            if (!other.spouses.some((s) => s.id === p.id)) other.spouses.push({ id: p.id });
+          }
+        } else if (op.rel === 'child') {
+          p.parents.push(a.id);
+          a.children.push({ id: p.id });
+          const o = op.otherParent && find(op.otherParent);
+          if (o) { p.parents.push(o.id); o.children = o.children || []; o.children.push({ id: p.id }); }
+        } else if (op.rel === 'sibling') {
+          a.parents.map(find).filter(Boolean).forEach((par) => {
+            p.parents.push(par.id);
+            par.children = par.children || [];
+            par.children.push({ id: p.id });
+          });
+        } else if (op.rel === 'spouse') {
+          const s = { id: a.id };
+          if (f.mdate) s.marriageDate = f.mdate;
+          if ((f.mplace || '').trim()) s.marriagePlace = f.mplace.trim();
+          p.spouses.push(s);
+          a.spouses.push(Object.assign({}, s, { id: p.id }));
+        }
+      }
+      entry.summary = `Added ${f.name.trim()} as ${a.name}'s ${word}`;
+    } else if (op.type === 'edit') {
+      const p = find(op.id);
+      if (!p) throw new Error('That person is no longer in the tree.');
+      const done = [];
+      const set = op.set || {};
+      const label = { name: 'name', nickname: 'nickname', living: 'living', bdate: 'birth date', bplace: 'birthplace', ddate: 'death date', dplace: 'place of death', cemetery: 'burial', burialPlace: 'burial place', occupation: 'occupation' };
+      Object.keys(set).forEach((k) => {
+        const v = set[k];
+        if (k === 'name') p.name = v;
+        else if (k === 'nickname') p.nickname = v;
+        else if (k === 'living') p.living = v;
+        else if (k === 'occupation') p.occupation = v;
+        else if (k === 'bdate' || k === 'bplace') { p.birth = p.birth || {}; p.birth[k === 'bdate' ? 'date' : 'place'] = v; }
+        else if (k === 'ddate' || k === 'dplace') { p.death = p.death || {}; p.death[k === 'ddate' ? 'date' : 'place'] = v; }
+        else if (k === 'cemetery' || k === 'burialPlace') { p.burial = p.burial || {}; p.burial[k === 'cemetery' ? 'cemetery' : 'location'] = v; }
+        else return;
+        done.push(label[k]);
+      });
+      if (p.burial && !p.burial.cemetery && !p.burial.location && !p.burial.notes && !p.burial.date) p.burial = null;
+      if ((op.note || '').trim()) {
+        p.facts = p.facts || [];
+        p.facts.push({ text: op.note.trim(), source: `Shared by ${who}, ${fmtDate(today())}` });
+        done.push('a note');
+      }
+      if (!done.length) throw new Error('Nothing was changed.');
+      p.sources = p.sources || [];
+      p.sources.push({ title: `Updated by ${who} on the family site, ${fmtDate(today())}` });
+      entry.focus = p.id;
+      entry.summary = `Updated ${p.name}: ${done.join(', ')}`;
+    } else if (op.type === 'story') {
+      const p = find(op.person);
+      const people = p ? [p.id] : [];
+      const id = 'memory-' + Date.now().toString(36);
+      data.stories.push({
+        id, title: (op.title || '').trim() || (p ? `A memory of ${firstOf(p)}` : 'A family memory'),
+        text: op.text.trim(), people, addedBy: who, source: { title: `Shared by ${who}, ${fmtDate(today())}` }
+      });
+      entry.focus = p ? p.id : null;
+      entry.story = id;
+      entry.summary = p ? `Shared a memory about ${p.name}` : 'Shared a family memory';
+    } else if (op.type === 'undo') {
+      const c = data.changes.find((x) => x.id === op.change);
+      if (!c || !c.undo) throw new Error('That change can no longer be undone.');
+      if (c.undone) throw new Error('That change was already undone.');
+      const u = c.undo;
+      u.restore.forEach((old) => {
+        const i = data.people.findIndex((p) => p.id === old.id);
+        if (i >= 0) data.people[i] = old; else data.people.push(old);
+      });
+      data.people = data.people.filter((p) => !u.remove.includes(p.id));
+      data.people.forEach((p) => {
+        p.parents = (p.parents || []).filter((x) => !u.remove.includes(x));
+        p.children = (p.children || []).filter((x) => !u.remove.includes(x.id));
+        p.spouses = (p.spouses || []).filter((x) => !u.remove.includes(x.id));
+      });
+      data.stories = data.stories.filter((s) => !u.removeStories.includes(s.id));
+      c.undone = { when: entry.when, by: who };
+      entry.focus = c.focus && data.people.some((p) => p.id === c.focus) ? c.focus : null;
+      entry.summary = `Undid: ${c.summary}`;
+    }
+
+    if (op.type !== 'undo') {
+      const restore = [], remove = [];
+      data.people.forEach((p) => {
+        const b = before.get(p.id);
+        if (b === undefined) remove.push(p.id);
+        else if (b !== JSON.stringify(p)) restore.push(JSON.parse(b));
+      });
+      entry.undo = { restore, remove, removeStories: data.stories.filter((s) => !storiesBefore.has(s.id)).map((s) => s.id) };
+    }
+    data.changes.push(entry);
+    return entry;
+  }
+
+  // ---- talking to GitHub
+  async function encryptWith(bits, like, data) {
+    const iv = crypto.getRandomValues(new Uint8Array(16));
+    const aesKey = await crypto.subtle.importKey('raw', bits.slice(0, 32), { name: 'AES-CBC' }, false, ['encrypt']);
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv }, aesKey, new TextEncoder().encode(JSON.stringify(data))));
+    const macKey = await crypto.subtle.importKey('raw', bits.slice(32, 64), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    const msg = new Uint8Array(iv.length + ct.length);
+    msg.set(iv); msg.set(ct, iv.length);
+    const mac = new Uint8Array(await crypto.subtle.sign('HMAC', macKey, msg));
+    return {
+      v: 1, kdf: like.kdf || 'PBKDF2-SHA256', iter: like.iter, cipher: like.cipher || 'AES-256-CBC+HMAC-SHA256',
+      saved: new Date().toISOString(), salt: like.salt, iv: b64e(iv), mac: b64e(mac), ct: b64e(ct)
+    };
+  }
+  class SaveError extends Error { constructor(kind, msg) { super(msg || kind); this.kind = kind; } }
+  async function gh(path, opts) {
+    const e = state.data.meta.editing;
+    const o = opts || {};
+    let r;
+    try {
+      r = await fetch(`https://api.github.com/repos/${e.owner}/${e.repo}/${path}`, {
+        method: o.method || 'GET', cache: 'no-store', body: o.body,
+        headers: Object.assign({ Authorization: `Bearer ${e.token}`, Accept: o.accept || 'application/vnd.github+json' },
+          o.body ? { 'Content-Type': 'application/json' } : {})
+      });
+    } catch (x) { throw new SaveError('offline'); }
+    if (r.status === 401 || r.status === 403 || r.status === 404) throw new SaveError('key', `GitHub said ${r.status}`);
+    return r;
+  }
+  async function fetchLatest() {
+    const e = state.data.meta.editing;
+    const r = await gh(`contents/${e.path}?ref=${encodeURIComponent(e.branch)}&t=${Date.now()}`);
+    if (!r.ok) throw new SaveError('github', `GitHub said ${r.status}`);
+    const m = await r.json();
+    let text;
+    if (m.content && m.encoding === 'base64') text = new TextDecoder().decode(b64d(m.content.replace(/\s/g, '')));
+    else {
+      const b = await gh(`git/blobs/${m.sha}`, { accept: 'application/vnd.github.raw' });
+      if (!b.ok) throw new SaveError('github', `GitHub said ${b.status}`);
+      text = await b.text();
+    }
+    const enc = JSON.parse(text);
+    if (enc.salt !== state.enc.salt) throw new SaveError('password');
+    const data = await decryptWith(state.keyBits, enc);
+    if (!data) throw new SaveError('password');
+    return { sha: m.sha, enc, data };
+  }
+  async function saveOp(op, who) {
+    const e = state.data.meta.editing;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const latest = await fetchLatest();
+      const entry = applyOp(latest.data, op, who);
+      const enc = await encryptWith(state.keyBits, latest.enc, latest.data);
+      const r = await gh(`contents/${e.path}`, {
+        method: 'PUT',
+        body: JSON.stringify({ message: `Family edit: ${entry.summary} (by ${who})`, content: btoa(JSON.stringify(enc)), sha: latest.sha, branch: e.branch })
+      });
+      if (r.status === 409 || r.status === 422) continue; // someone else saved at the same moment: start again from theirs
+      if (!r.ok) throw new SaveError('github', `GitHub said ${r.status}`);
+      state.enc = enc;
+      reindex(latest.data);
+      return entry;
+    }
+    throw new SaveError('busy');
+  }
+  async function refreshFromGitHub() {
+    if (!editingOn()) return;
+    try {
+      const latest = await fetchLatest();
+      if ((latest.enc.saved || '') > (state.enc.saved || '')) { state.enc = latest.enc; reindex(latest.data); }
+    } catch (e) { /* the published copy is fine to show */ }
+  }
+  function saveErrorText(e) {
+    switch (e && e.kind) {
+      case 'offline': return 'We couldn\'t reach the internet. Check that you\'re connected, then press “Try again.”';
+      case 'key': return 'The tree\'s saving key isn\'t working any more (it may have expired). Nothing was changed. Please let Josiah know.';
+      case 'password': return 'The family password was changed since you opened the tree. Please reload the page, type the new password, and try again.';
+      case 'busy': return 'Several people were saving at the same time. Please press “Try again.”';
+      default: return 'Something went wrong and nothing was saved. Please press “Try again.” If it keeps happening, let Josiah know.' + (e && e.message ? ` (${e.message})` : '');
+    }
+  }
+
+  // ---- the step-by-step screens
+  const ACTIONS = [
+    { key: 'parent', icon: '👪', label: (n) => `Add ${n}'s mother or father` },
+    { key: 'child', icon: '🍼', label: (n) => `Add ${n}'s son or daughter` },
+    { key: 'sibling', icon: '🤝', label: (n) => `Add ${n}'s brother or sister` },
+    { key: 'spouse', icon: '💍', label: (n) => `Add ${n}'s husband or wife` },
+    { key: 'edit', icon: '✏️', label: (n) => `Fix or fill in ${n}'s dates, places and details` },
+    { key: 'story', icon: '📝', label: (n) => `Share a memory or story about ${n}` }
+  ];
+  function openEditor(opts) {
+    if (!editingOn()) return;
+    Object.assign(editor, { busy: false, personId: null, action: null, form: {}, forms: {}, error: null, result: null, confirmUndo: null }, opts || {});
+    editor.step = editor.personId ? (editor.action ? 'form' : 'what') : 'who';
+    if (editor.personId && editor.action) startForm();
+    $('#editor').hidden = false;
+    renderEditor();
+  }
+  function closeEditor() { $('#editor').hidden = true; editor.busy = false; }
+
+  const field = (id, label, value, o) => {
+    o = o || {};
+    const input = o.area
+      ? `<textarea id="ef-${id}" rows="${o.rows || 5}" placeholder="${esc(o.ph || '')}">${esc(value || '')}</textarea>`
+      : `<input id="ef-${id}" type="text" value="${esc(value || '')}" placeholder="${esc(o.ph || '')}" autocomplete="off"${o.date ? ' data-date="1"' : ''}>`;
+    return `<div class="ef-field"><label for="ef-${id}">${esc(label)}</label>${o.help ? `<p class="ef-help">${esc(o.help)}</p>` : ''}${input}` +
+      (o.date ? `<p class="ef-date-hint" id="ef-${id}-hint" aria-live="polite"></p>` : '') + `</div>`;
+  };
+  const choice = (name, options, current) => `<div class="ef-choices" role="radiogroup">${options.map(([v, l]) =>
+    `<button type="button" class="ef-choice${current === v ? ' on' : ''}" role="radio" aria-checked="${current === v}" data-choice="${esc(name)}" data-value="${esc(v)}">${esc(l)}</button>`).join('')}</div>`;
+
+  function startForm() {
+    const p = P(editor.personId);
+    // Going "Back" and returning keeps what was already typed.
+    const key = `${editor.personId}|${editor.action}`;
+    editor.forms = editor.forms || {};
+    if (editor.forms[key]) { editor.form = editor.forms[key]; return; }
+    const f = editor.form = editor.forms[key] = {};
+    if (editor.action === 'edit' && p) {
+      Object.assign(f, {
+        name: p.name, nickname: p.nickname || '', living: p.living ? 'yes' : 'no',
+        bdate: shown(p.birth && p.birth.date), bplace: (p.birth && p.birth.place) || '',
+        ddate: shown(p.death && p.death.date), dplace: (p.death && p.death.place) || '',
+        cemetery: (p.burial && p.burial.cemetery) || '', burialPlace: (p.burial && p.burial.location) || '',
+        occupation: p.occupation || '', note: ''
+      });
+    } else if (editor.action === 'child') {
+      const partners = partnersOf(p.id);
+      f.otherParent = partners.length === 1 ? partners[0] : '';
+    }
+    if (editor.action === 'parent' && p) {
+      const have = parentsOf(p.id).map((x) => P(x).sex);
+      if (have.length === 1) f.sex = have[0] === 'M' ? 'F' : have[0] === 'F' ? 'M' : '';
+    }
+  }
+
+  const back = (to, text) => `<button type="button" class="btn ef-back" data-ed-go="${to}">← ${esc(text || 'Back')}</button>`;
+  function renderEditor() {
+    const el = $('#editor-body');
+    const p = P(editor.personId);
+    const n = p ? firstName(p) : '';
+    let h = '';
+
+    if (editor.step === 'who') {
+      const sug = [state.panelId, state.root].filter((x, i, a) => x && P(x) && a.indexOf(x) === i && !isMinor(P(x)));
+      h += `<p class="eyebrow">Add to the family tree</p><h2>${editor.action === 'story' ? 'Who is your memory about?' : 'Who is it about?'}</h2>` +
+        `<p class="ef-lede">Start by choosing the person. If you're adding someone new, choose their parent, child, brother, sister, or husband or wife who is already in the tree.</p>`;
+      if (sug.length) h += `<div class="ef-big-list">${sug.map((id) => `<button type="button" class="ef-big" data-ed-person="${esc(id)}"><span class="ef-big-icon">👤</span><span><strong>${esc(P(id).name)}</strong><small>${esc(lifespan(P(id)))}</small></span></button>`).join('')}</div>`;
+      h += `<div class="ef-field"><label for="ef-who">${sug.length ? 'Or type a name to find someone else' : 'Type a name'}</label>` +
+        `<input id="ef-who" type="search" placeholder="For example: Ruth or Netzley" autocomplete="off"></div><div id="ef-who-results" class="ef-big-list"></div>`;
+      if (editor.action === 'story') h += `<button type="button" class="btn ef-link" data-ed-person="">It's about the whole family, not one person</button>`;
+      h += `<div class="ef-foot"><button type="button" class="btn ef-link" data-ed-go="changes">See recent changes</button></div>`;
+    } else if (editor.step === 'what') {
+      const twoParents = parentsOf(p.id).length >= 2;
+      h += `<p class="eyebrow">${esc(p.name)}</p><h2>What would you like to do?</h2><div class="ef-big-list">` +
+        ACTIONS.map((a) => {
+          const off = a.key === 'parent' && twoParents;
+          return `<button type="button" class="ef-big" data-ed-action="${a.key}"${off ? ' disabled' : ''}><span class="ef-big-icon">${a.icon}</span>` +
+            `<span><strong>${esc(a.label(n))}</strong>${off ? '<small>Both parents are already in the tree.</small>' : ''}</span></button>`;
+        }).join('') + `</div><div class="ef-foot">${back('who', 'Choose a different person')}<button type="button" class="btn ef-link" data-ed-go="changes">See recent changes</button></div>`;
+    } else if (editor.step === 'form') {
+      h += formHTML(p, n);
+    } else if (editor.step === 'review') {
+      h += reviewHTML(p, n);
+    } else if (editor.step === 'saving') {
+      h += `<div class="ef-center"><div class="ef-spinner" aria-hidden="true"></div><h2>Saving…</h2><p class="ef-lede">Please wait a moment and don't close this page.</p></div>`;
+    } else if (editor.step === 'done') {
+      const r = editor.result;
+      h += `<div class="ef-center"><div class="ef-check" aria-hidden="true">✓</div><h2>Thank you${editor.who ? ', ' + esc(editor.who.split(' ')[0]) : ''}!</h2>` +
+        `<p class="ef-lede">${esc(r.summary)}.</p><p class="ef-lede">It's saved for the whole family. On other computers and phones it shows up within a few minutes.</p>` +
+        `<div class="ef-buttons">${r.focus && P(r.focus) ? `<button type="button" class="btn btn-primary ef-main" data-ed-show="${esc(r.focus)}">Show me</button>` : ''}` +
+        `<button type="button" class="btn ef-main" data-ed-go="again">Add something else</button>` +
+        `<button type="button" class="btn ef-main" data-ed-close>I'm finished</button></div></div>`;
+    } else if (editor.step === 'error') {
+      h += `<div class="ef-center"><div class="ef-check ef-bad" aria-hidden="true">!</div><h2>That didn't save</h2><p class="ef-lede">${esc(editor.error)}</p>` +
+        `<div class="ef-buttons"><button type="button" class="btn btn-primary ef-main" data-ed-save>Try again</button>${editor.built && editor.built.op.type === 'undo' ? back('changes') : back('form', 'Go back to the form')}</div></div>`;
+    } else if (editor.step === 'changes') {
+      h += changesHTML();
+    }
+    el.innerHTML = h;
+    el.scrollTop = 0;
+    wireEditorStep();
+  }
+
+  function formHTML(p, n) {
+    const f = editor.form, a = editor.action;
+    let h = '';
+    const who = `<div class="ef-field ef-you">${field('yourname', 'Your name', editor.who || store.get(ED_NAME) || '', { help: 'So the family knows who shared this.', ph: 'For example: Aunt Mary Smith' })}</div>`;
+    if (a === 'edit') {
+      h += `<p class="eyebrow">${esc(p.name)}</p><h2>Fix or fill in details</h2><p class="ef-lede">Change anything that's wrong or missing. Leave the rest as it is.</p>` +
+        field('name', 'Full name', f.name, { help: 'For women, you can put the maiden name in brackets, like Mary (Smith) Jones.' }) +
+        field('nickname', 'Nickname (if they had one)', f.nickname) +
+        `<div class="ef-field"><label>Is ${esc(n)} still living?</label>${choice('living', [['yes', 'Yes, living'], ['no', 'No, has passed away']], f.living)}</div>` +
+        `<fieldset class="ef-group"><legend>Birth</legend>${field('bdate', 'Date of birth', f.bdate, { date: 1, ph: 'June 3, 1925 — or just 1925' })}${field('bplace', 'Where they were born', f.bplace, { ph: 'Town, County, State' })}</fieldset>` +
+        `<fieldset class="ef-group" data-if-dead><legend>Death</legend>${field('ddate', 'Date of death', f.ddate, { date: 1, ph: 'March 12, 1998 — or just 1998' })}${field('dplace', 'Where they died', f.dplace, { ph: 'Town, County, State' })}` +
+        `${field('cemetery', 'Cemetery where buried', f.cemetery)}${field('burialPlace', 'Cemetery town', f.burialPlace)}</fieldset>` +
+        field('occupation', 'Work or occupation', f.occupation, { ph: 'Farmer, teacher, nurse…' }) +
+        field('note', 'Anything else to add or explain?', f.note, { area: 1, rows: 4, help: 'For example: "She was born at home on the farm," or "The date on the gravestone is wrong."' });
+    } else if (a === 'story') {
+      h += `<p class="eyebrow">${esc(p ? p.name : 'The whole family')}</p><h2>Share a memory or story</h2>` +
+        `<p class="ef-lede">Write it just as you'd tell it. There's no wrong way to do it.</p>` +
+        field('title', 'A short title (you can skip this)', f.title, { ph: p ? `A memory of ${n}` : 'A family memory' }) +
+        field('text', 'Your memory or story', f.text, { area: 1, rows: 10 });
+    } else {
+      const sexChoices = {
+        parent: [['M', 'Father'], ['F', 'Mother']], child: [['M', 'Son'], ['F', 'Daughter']],
+        sibling: [['M', 'Brother'], ['F', 'Sister']], spouse: [['M', 'Husband'], ['F', 'Wife']]
+      }[a];
+      const title = { parent: `Add ${n}'s mother or father`, child: `Add ${n}'s son or daughter`, sibling: `Add ${n}'s brother or sister`, spouse: `Add ${n}'s husband or wife` }[a];
+      h += `<p class="eyebrow">${esc(p.name)}</p><h2>${esc(title)}</h2>`;
+      h += `<div class="ef-field"><label>Is this ${esc(n)}'s…</label>${choice('sex', sexChoices, f.sex)}</div>`;
+      if (a === 'sibling' && !parentsOf(p.id).length) {
+        h += `<p class="ef-note">${esc(n)}'s parents aren't in the tree yet, so this brother or sister will be listed by name on ${esc(n)}'s page. (Tip: add the parents first, and then brothers and sisters will appear in the chart.)</p>`;
+      }
+      if (a === 'child') {
+        const partners = partnersOf(p.id);
+        h += `<div class="ef-field"><label>Who is the other parent?</label>${choice('otherParent',
+          partners.map((x) => [x, P(x).name]).concat([['', 'Someone else, or not sure']]), f.otherParent || '')}</div>`;
+      }
+      h += field('name', 'Full name', f.name, { help: 'First, middle and last name if you know them. For women, you can put the maiden name in brackets, like Mary (Smith) Jones.', ph: 'For example: Mary Ellen (Smith) Jones' }) +
+        `<div class="ef-field"><label>Are they still living?</label>${choice('living', [['yes', 'Yes, living'], ['no', 'No, passed away'], ['unsure', 'Not sure']], f.living)}</div>` +
+        `<fieldset class="ef-group"><legend>Birth</legend>${field('bdate', 'Date of birth (if you know it)', f.bdate, { date: 1, ph: 'June 3, 1925 — or just 1925' })}${field('bplace', 'Where they were born', f.bplace, { ph: 'Town, County, State' })}</fieldset>` +
+        `<fieldset class="ef-group" data-if-dead><legend>Death</legend>${field('ddate', 'Date of death (if you know it)', f.ddate, { date: 1, ph: 'March 12, 1998 — or just 1998' })}${field('dplace', 'Where they died', f.dplace, { ph: 'Town, County, State' })}</fieldset>`;
+      if (a === 'spouse') h += `<fieldset class="ef-group"><legend>Marriage</legend>${field('mdate', 'Wedding date (if you know it)', f.mdate, { date: 1, ph: 'June 3, 1950 — or just 1950' })}${field('mplace', 'Where they married', f.mplace, { ph: 'Town, County, State' })}</fieldset>`;
+      h += field('notes', 'Anything else about them?', f.notes, { area: 1, rows: 4, help: 'Where they lived, their work, what they were like… anything you\'d like the family to know.' });
+    }
+    h += who;
+    h += `<p class="ef-error" id="ef-error" hidden></p>`;
+    h += `<div class="ef-foot">${back(editor.fromWhat === false ? 'who' : 'what')}<button type="button" class="btn btn-primary ef-main" data-ed-review>Next →</button></div>`;
+    return h;
+  }
+
+  function collectForm() {
+    $$('#editor-body [id^="ef-"]').forEach((i) => {
+      if (i.matches('input, textarea') && i.id !== 'ef-who-results') editor.form[i.id.slice(3)] = i.value;
+    });
+    if (editor.form.yourname != null) editor.who = editor.form.yourname.trim();
+  }
+
+  function buildOp() {
+    const f = editor.form, a = editor.action, p = P(editor.personId);
+    const d = (k) => parseDate(f[k]).value;
+    const t = (k) => (f[k] || '').trim() || null;
+    if (!editor.who) return { error: 'Please type your name in the “Your name” box, so the family knows who shared this.' };
+    if (a === 'story') {
+      if (!(f.text || '').trim()) return { error: 'Please write your memory or story in the big box.' };
+      return { op: { type: 'story', person: p ? p.id : null, title: f.title || '', text: f.text } };
+    }
+    if (a === 'edit') {
+      const set = {};
+      const cur = {
+        name: p.name, nickname: p.nickname || null, living: !!p.living, bdate: (p.birth && p.birth.date) || null, bplace: (p.birth && p.birth.place) || null,
+        ddate: (p.death && p.death.date) || null, dplace: (p.death && p.death.place) || null, cemetery: (p.burial && p.burial.cemetery) || null,
+        burialPlace: (p.burial && p.burial.location) || null, occupation: p.occupation || null
+      };
+      const next = {
+        name: t('name'), nickname: t('nickname'), living: f.living === 'yes', bdate: d('bdate'), bplace: t('bplace'),
+        ddate: d('ddate'), dplace: t('dplace'), cemetery: t('cemetery'), burialPlace: t('burialPlace'), occupation: t('occupation')
+      };
+      if (!next.name) return { error: 'The name can\'t be empty.' };
+      // dates the person didn't touch keep their exact stored form
+      ['bdate', 'ddate'].forEach((k) => { if ((f[k] || '').trim() === shown(cur[k])) next[k] = cur[k]; });
+      if (next.living) { next.ddate = cur.ddate; next.dplace = cur.dplace; }
+      Object.keys(next).forEach((k) => { if (next[k] !== cur[k]) set[k] = next[k]; });
+      if (!Object.keys(set).length && !(f.note || '').trim()) return { error: 'Nothing has been changed yet. Change a box above, or press “Back.”' };
+      return { op: { type: 'edit', id: p.id, set, note: f.note || '' }, set, cur };
+    }
+    if (!f.sex) return { error: `Please choose ${relWord(a, 'M')} or ${relWord(a, 'F')} at the top.` };
+    if (!t('name')) return { error: 'Please type their name.' };
+    if (!f.living) return { error: 'Please choose whether they are still living.' };
+    const person = { name: t('name'), sex: f.sex, living: f.living, bdate: d('bdate'), bplace: t('bplace'), ddate: d('ddate'), dplace: t('dplace'), notes: t('notes') };
+    if (a === 'spouse') { person.mdate = d('mdate'); person.mplace = t('mplace'); }
+    return { op: { type: 'add', anchor: p.id, rel: a, otherParent: a === 'child' ? (f.otherParent || null) : null, person } };
+  }
+
+  function reviewHTML(p, n) {
+    const b = editor.built, op = b.op;
+    const line = (label, v) => v ? `<dt>${esc(label)}</dt><dd>${esc(v)}</dd>` : '';
+    let h = `<p class="eyebrow">Almost done</p><h2>Is this right?</h2><div class="ef-review">`;
+    if (op.type === 'add') {
+      const x = op.person;
+      h += `<p class="ef-sentence">Add <strong>${esc(x.name)}</strong> as ${esc(p.name)}'s <strong>${esc(relWord(op.rel, x.sex))}</strong>.</p><dl>` +
+        line('Living', x.living === 'yes' ? 'Yes' : x.living === 'no' ? 'No' : 'Not sure') +
+        line('Born', [shown(x.bdate), x.bplace].filter(Boolean).join(', ')) +
+        (x.living === 'yes' ? '' : line('Died', [shown(x.ddate), x.dplace].filter(Boolean).join(', '))) +
+        line('Married', [shown(x.mdate), x.mplace].filter(Boolean).join(', ')) +
+        (op.otherParent && P(op.otherParent) ? line('Other parent', P(op.otherParent).name) : '') +
+        line('Notes', x.notes) + `</dl>`;
+      const twins = state.data.people.filter((q) => norm(q.name) === norm(x.name));
+      if (twins.length) h += `<p class="ef-note">There's already someone named ${esc(twins[0].name)}${lifespan(twins[0]) ? ` (${esc(lifespan(twins[0]))})` : ''} in the tree. If that's the same person, go back and don't add them twice.</p>`;
+    } else if (op.type === 'edit') {
+      const lab = { name: 'Name', nickname: 'Nickname', living: 'Living', bdate: 'Born', bplace: 'Birthplace', ddate: 'Died', dplace: 'Place of death', cemetery: 'Cemetery', burialPlace: 'Cemetery town', occupation: 'Work' };
+      const fmt = (k, v) => k === 'living' ? (v ? 'Yes' : 'No') : (k === 'bdate' || k === 'ddate') ? shown(v) : v;
+      const rows = Object.keys(b.set).map((k) => `<tr><th>${esc(lab[k])}</th><td class="ef-old">${esc(fmt(k, b.cur[k]) || '(blank)')}</td><td>→</td><td class="ef-new">${esc(fmt(k, b.set[k]) || '(blank)')}</td></tr>`).join('');
+      h += `<p class="ef-sentence">Update <strong>${esc(p.name)}</strong>:</p>${rows ? `<table class="ef-diff">${rows}</table>` : ''}` +
+        ((op.note || '').trim() ? `<p><strong>Note:</strong> ${esc(op.note.trim())}</p>` : '');
+    } else if (op.type === 'story') {
+      h += `<p class="ef-sentence">Share this ${p ? `memory of <strong>${esc(p.name)}</strong>` : 'family memory'}:</p>` +
+        `<blockquote>${esc(op.text.trim()).replace(/\n/g, '<br>')}</blockquote>`;
+    }
+    h += `<p class="muted">Shared by ${esc(editor.who)}</p></div>` +
+      `<div class="ef-foot"><button type="button" class="btn ef-back" data-ed-go="form">← Go back and change it</button>` +
+      `<button type="button" class="btn btn-primary ef-main" data-ed-save>Yes, save it</button></div>`;
+    return h;
+  }
+
+  function changesHTML() {
+    const list = (state.data.changes || []).slice().reverse().slice(0, 40);
+    let h = `<p class="eyebrow">Family tree</p><h2>Recent changes</h2>`;
+    if (!list.length) h += `<p class="ef-lede">No one has made any changes on the site yet.</p>`;
+    else {
+      h += `<p class="ef-lede">Newest first. If something was a mistake, you can undo it.</p><ul class="ef-changes">` + list.map((c) => {
+        const when = new Date(c.when);
+        const date = isNaN(when) ? '' : when.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+        let act = '';
+        if (c.undone) act = `<span class="muted small">Undone by ${esc(c.undone.by)}</span>`;
+        else if (c.undo && editor.confirmUndo === c.id) act = `<span class="ef-confirm">Undo this? <button type="button" class="btn btn-primary" data-ed-undo-yes="${esc(c.id)}">Yes, undo it</button> <button type="button" class="btn" data-ed-undo-no>No</button></span>`;
+        else if (c.undo) act = `<button type="button" class="btn" data-ed-undo="${esc(c.id)}">Undo</button>`;
+        return `<li><div><strong>${esc(c.summary)}</strong><div class="muted small">${esc(c.by)}${date ? ' · ' + esc(date) : ''}</div></div>${act}</li>`;
+      }).join('') + `</ul>`;
+    }
+    h += `<div class="ef-foot"><button type="button" class="btn ef-back" data-ed-go="${editor.personId ? 'what' : 'who'}">← Back</button></div>`;
+    return h;
+  }
+
+  function updateDateHints() {
+    $$('#editor-body input[data-date]').forEach((i) => {
+      const hint = document.getElementById(i.id + '-hint');
+      if (!hint) return;
+      const r = parseDate(i.value);
+      hint.className = 'ef-date-hint' + (r.unsure ? ' unsure' : '');
+      hint.textContent = !i.value.trim() ? '' : r.unsure ? `We'll save it just as you typed it: “${r.label}”` : `✓ ${r.label}`;
+    });
+    const dead = $('#editor-body [data-if-dead]');
+    if (dead) dead.hidden = editor.form.living === 'yes';
+  }
+
+  function wireEditorStep() {
+    const who = $('#ef-who');
+    if (who) {
+      const res = $('#ef-who-results');
+      who.addEventListener('input', () => {
+        const found = searchPeople(who.value, 8).filter((x) => !isMinor(x));
+        res.innerHTML = !who.value.trim() ? '' : found.length
+          ? found.map((x) => `<button type="button" class="ef-big" data-ed-person="${esc(x.id)}"><span class="ef-big-icon">👤</span><span><strong>${esc(x.name)}</strong><small>${esc([lifespan(x), state.root ? rel(x.id).term : ''].filter(Boolean).join(' · '))}</small></span></button>`).join('')
+          : `<p class="ef-note">No one by that name yet. Try just a first name or just a last name.</p>`;
+      });
+      if (!$('.ef-big', $('#editor-body'))) setTimeout(() => who.focus(), 30);
+    }
+    $$('#editor-body input[data-date]').forEach((i) => i.addEventListener('input', updateDateHints));
+    updateDateHints();
+  }
+
+  function wireEditor() {
+    const modal = $('#editor');
+    $('#editor-close').addEventListener('click', () => { if (!editor.busy) closeEditor(); });
+    modal.addEventListener('click', async (e) => {
+      const t = (s) => e.target.closest(s);
+      let b;
+      if ((b = t('[data-ed-person]'))) {
+        editor.personId = b.dataset.edPerson || null;
+        if (editor.action === 'story') { editor.fromWhat = false; startForm(); editor.step = 'form'; }
+        else editor.step = 'what';
+        renderEditor();
+      } else if ((b = t('[data-ed-action]'))) {
+        editor.action = b.dataset.edAction; editor.fromWhat = true;
+        startForm(); editor.step = 'form'; renderEditor();
+      } else if ((b = t('[data-choice]'))) {
+        collectForm();
+        editor.form[b.dataset.choice] = b.dataset.value;
+        $$(`[data-choice="${b.dataset.choice}"]`, modal).forEach((x) => { const on = x === b; x.classList.toggle('on', on); x.setAttribute('aria-checked', on); });
+        updateDateHints();
+      } else if (t('[data-ed-review]')) {
+        collectForm();
+        const built = buildOp();
+        const err = $('#ef-error');
+        if (built.error) { err.textContent = built.error; err.hidden = false; err.scrollIntoView({ block: 'center', behavior: 'smooth' }); return; }
+        store.set(ED_NAME, editor.who);
+        editor.built = built; editor.step = 'review'; renderEditor();
+      } else if (t('[data-ed-save]')) {
+        if (editor.busy) return;
+        editor.busy = true; editor.step = 'saving'; renderEditor();
+        try {
+          editor.result = await saveOp(editor.built.op, editor.who);
+          editor.step = 'done';
+        } catch (x) {
+          editor.error = saveErrorText(x); editor.step = 'error';
+        }
+        editor.busy = false;
+        renderEditor();
+      } else if ((b = t('[data-ed-show]'))) {
+        const id = b.dataset.edShow;
+        closeEditor();
+        go('tree');
+        openPanel(id);
+        if (locate(id)) showInChart(id);
+      } else if ((b = t('[data-ed-go]'))) {
+        const to = b.dataset.edGo;
+        if (editor.step === 'form') collectForm();
+        if (to === 'again') { openEditor({ personId: editor.personId }); return; }
+        if (to === 'who') { editor.personId = null; if (editor.step === 'what') editor.action = null; }
+        if (to === 'what') editor.action = null;
+        editor.confirmUndo = null;
+        editor.step = to; renderEditor();
+      } else if (t('[data-ed-close]')) {
+        closeEditor();
+      } else if ((b = t('[data-ed-undo]'))) {
+        editor.confirmUndo = b.dataset.edUndo; renderEditor();
+      } else if (t('[data-ed-undo-no]')) {
+        editor.confirmUndo = null; renderEditor();
+      } else if ((b = t('[data-ed-undo-yes]'))) {
+        if (editor.busy) return;
+        if (!editor.who) editor.who = store.get(ED_NAME) || 'A family member';
+        editor.built = { op: { type: 'undo', change: b.dataset.edUndoYes } };
+        editor.busy = true; editor.step = 'saving'; renderEditor();
+        try { editor.result = await saveOp(editor.built.op, editor.who); editor.step = 'done'; }
+        catch (x) { editor.error = saveErrorText(x); editor.step = 'error'; }
+        editor.busy = false;
+        renderEditor();
+      }
+    });
+    $('#edit-btn').addEventListener('click', () => openEditor({ personId: null }));
   }
 
   // ------------------------------------------------------------------ boot
@@ -1327,6 +1996,8 @@
     wireChart();
     wirePanel();
     wireSettings();
+    wireEditor();
+    $('#edit-btn').hidden = !editingOn();
     renderLegend();
     wireSearch($('#quickfind'), $('#quickfind-results'), {
       floating: true, withRel: true, limit: 8,
@@ -1354,6 +2025,7 @@
       $('#viewing-as').innerHTML = 'Viewing as —';
       openPicker();
     }
+    refreshFromGitHub();
   }
 
   // Expose a few internals for debugging in the console.
