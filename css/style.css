@@ -475,3 +475,12 @@ dl.facts-grid dd { margin: 0; }
 .evidence-list { margin: 0 0 6px; padding-left: 1.1em; }
 .evidence-list li { margin: 2px 0; }
 .evidence-gap { margin: 4px 0 0; }
+
+/* Stories: Josiah's / Alivia's family toggle */
+.story-toggle { display: inline-flex; gap: 4px; padding: 4px; margin: 14px 0 6px; background: var(--surface); border: 1px solid var(--rule); border-radius: 999px; box-shadow: var(--shadow); }
+.story-toggle button { font: inherit; font-size: 15px; font-weight: 600; padding: 8px 18px; border: 0; border-radius: 999px; background: transparent; color: var(--ink-2); cursor: pointer; }
+.story-toggle button:hover { color: var(--ink); }
+.story-toggle button.on[data-story-fam="josiah"] { background: var(--line-stemen); color: var(--surface); }
+.story-toggle button.on[data-story-fam="alivia"] { background: var(--line-cramer); color: var(--surface); }
+.story-toggle button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+@media (max-width: 480px) { .story-toggle { display: flex; } .story-toggle button { flex: 1; padding: 8px 10px; } }

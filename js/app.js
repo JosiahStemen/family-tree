@@ -14,7 +14,7 @@
   const CARD_W = 176, CARD_H = 112, SLOT = 192, ROW_H = 160;
   const PAD_T = 46, PAD_B = 40, PAD_L = 170, PAD_R = 60;
   const LS = {
-    root: 'ft-root', living: 'ft-show-living', depth: 'ft-depth', todo: 'ft-todo-'
+    root: 'ft-root', living: 'ft-show-living', depth: 'ft-depth', todo: 'ft-todo-', storyFam: 'ft-story-family'
   };
 
   // ------------------------------------------------------------------ storage
@@ -1187,12 +1187,34 @@
   }
 
   // ------------------------------------------------------------------ stories
+  // Which family's stories to show: an explicit choice, else the side of whoever the tree is viewed as.
+  const STORY_FAMILIES = [
+    { key: 'josiah', label: "Josiah's family",
+      lede: 'Short histories drawn from the 1881 family history, obituaries, memorial pages, and memories shared by the family. Click a name to open that person.' },
+    { key: 'alivia', label: "Alivia's family",
+      lede: "Short histories of Alivia's Pennsylvania families, drawn from wills, court records, censuses, obituaries and memorial pages. Click a name to open that person." }
+  ];
+  const storyFamily = (s) => s.family || 'josiah';
+  function currentStoryFamily() {
+    const saved = store.get(LS.storyFam);
+    if (saved === 'josiah' || saved === 'alivia') return saved;
+    return state.root && branchOf(state.root) === 'cramer' ? 'alivia' : 'josiah';
+  }
   function renderStories() {
     const el = $('#view-stories');
-    const stories = state.data.stories || [];
-    const book = stories.map((s) => s.source).find((s) => s && /History of the Stemen Family/i.test(s.title || ''));
-    let h = `<div class="page-inner"><p class="eyebrow">Stories</p><h1>Family stories</h1>` +
-      `<p class="lede">Short histories drawn from the 1881 family history, obituaries, memorial pages, and memories shared by the family. Click a name to open that person.</p>`;
+    const fam = currentStoryFamily();
+    const famInfo = STORY_FAMILIES.find((f) => f.key === fam);
+    const all = state.data.stories || [];
+    const hasAlivia = all.some((s) => storyFamily(s) === 'alivia');
+    const stories = hasAlivia ? all.filter((s) => storyFamily(s) === fam) : all;
+    const book = fam === 'josiah' && stories.map((s) => s.source).find((s) => s && /History of the Stemen Family/i.test(s.title || ''));
+    let h = `<div class="page-inner"><p class="eyebrow">Stories</p><h1>Family stories</h1>`;
+    if (hasAlivia) {
+      h += `<div class="story-toggle" role="group" aria-label="Whose family stories">` +
+        STORY_FAMILIES.map((f) => `<button type="button" data-story-fam="${f.key}" aria-pressed="${f.key === fam}"` +
+          `${f.key === fam ? ' class="on"' : ''}>${esc(f.label)}</button>`).join('') + `</div>`;
+    }
+    h += `<p class="lede">${esc(famInfo.lede)}</p>`;
     if (editingOn()) h += `<p><button type="button" class="btn btn-edit-big" data-edit-story="1">✎ Share a memory or story</button></p>`;
     if (book) {
       h += `<div class="feature"><div class="f-icon">1881</div><div><h3>History of the Stemen Family</h3>` +
@@ -1208,6 +1230,10 @@
     }).join('');
     h += `</div>`;
     el.innerHTML = h;
+    $$('[data-story-fam]', el).forEach((b) => b.addEventListener('click', () => {
+      store.set(LS.storyFam, b.dataset.storyFam);
+      renderStories();
+    }));
   }
 
   // ------------------------------------------------------------------ routing
@@ -1221,6 +1247,11 @@
     ['tree', 'stories'].forEach((x) => { $('#view-' + x).hidden = x !== route; });
     $$('.tabs a').forEach((a) => a.classList.toggle('active', a.dataset.route === route));
     if (route === 'stories' && arg) {
+      const wanted = (state.data && state.data.stories || []).find((s) => s.id === arg);
+      if (wanted && storyFamily(wanted) !== currentStoryFamily()) {
+        store.set(LS.storyFam, storyFamily(wanted));
+        renderStories();
+      }
       const t = document.getElementById('story-' + arg);
       if (t) {
         $$('.story.target').forEach((s) => s.classList.remove('target'));
