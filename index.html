@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stemen–Netzley Family Tree</title>
+  <meta name="description" content="An interactive family tree of the Stemen, Netzley, Wood, Hesser, Brooks and Ferguson families.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M16 30V17M16 17l-7-6M16 17l7-6M9 11l-4-5M9 11l3-6M23 11l-3-6M23 11l4-5' stroke='%235a4632' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="#tree">
+      <span class="brand-mark" aria-hidden="true">❦</span>
+      <span class="brand-text">Stemen–Netzley <em>Family Tree</em></span>
+    </a>
+    <nav class="tabs" aria-label="Sections">
+      <a href="#tree" data-route="tree">Tree</a>
+      <a href="#stories" data-route="stories">Stories</a>
+    </nav>
+    <div class="header-right">
+      <div class="quickfind">
+        <input id="quickfind" type="search" placeholder="Find a person…" autocomplete="off" aria-label="Find a person">
+        <ul id="quickfind-results" class="search-results" hidden></ul>
+      </div>
+      <div class="viewing">
+        <span id="viewing-as">Viewing as —</span>
+        <button id="switch-person" class="btn btn-small">Switch person</button>
+      </div>
+      <button id="settings-btn" class="icon-btn" aria-label="Settings" title="Settings">⚙</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="view-tree" class="view">
+      <div class="toolbar">
+        <div class="toolbar-group">
+          <label for="depth-select">Show</label>
+          <select id="depth-select">
+            <option value="2">2 generations up</option>
+            <option value="3">3 generations up</option>
+            <option value="4" selected>4 generations up</option>
+            <option value="5">5 generations up</option>
+            <option value="6">6 generations up</option>
+            <option value="8">8 generations up</option>
+            <option value="99">All generations</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <button class="btn btn-small" id="zoom-out" aria-label="Zoom out">−</button>
+          <button class="btn btn-small" id="zoom-fit">Fit</button>
+          <button class="btn btn-small" id="zoom-in" aria-label="Zoom in">+</button>
+          <button class="btn btn-small" id="center-root">Center</button>
+        </div>
+        <div class="toolbar-group">
+          <button class="btn btn-small" id="sibs-all" aria-pressed="false">Show all siblings</button>
+        </div>
+        <button class="btn btn-small" id="legend-toggle" aria-expanded="false">Key</button>
+      </div>
+      <div id="legend" class="legend" hidden></div>
+      <div id="chart-viewport" class="chart-viewport">
+        <div id="chart-sizer" class="chart-sizer">
+          <div id="chart" class="chart"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-stories" class="view page" hidden></section>
+  </main>
+
+  <aside id="panel" class="panel" aria-hidden="true" aria-label="Person details">
+    <button id="panel-close" class="icon-btn panel-close" aria-label="Close">✕</button>
+    <div id="panel-body" class="panel-body"></div>
+  </aside>
+
+  <div id="unlock" class="modal unlock-modal" hidden>
+    <form class="modal-card unlock-card" id="unlock-form" autocomplete="on">
+      <p class="eyebrow">The Stemen–Netzley Family Tree</p>
+      <h1>For family only</h1>
+      <p class="muted">Enter the family password to open the tree.</p>
+      <input type="text" name="username" value="family" autocomplete="username" hidden>
+      <input id="unlock-password" type="password" autocomplete="current-password" placeholder="Family password" required>
+      <label class="toggle small"><input type="checkbox" id="unlock-remember"><span>Remember on this device</span></label>
+      <p id="unlock-error" class="unlock-error" hidden>That password didn't work. Try again.</p>
+      <button type="submit" class="btn btn-primary" id="unlock-btn">Open the tree</button>
+    </form>
+  </div>
+
+  <div id="picker" class="modal" hidden>
+    <div class="modal-card picker-card" role="dialog" aria-modal="true" aria-labelledby="picker-title">
+      <button id="picker-close" class="icon-btn modal-close" aria-label="Close">✕</button>
+      <p class="eyebrow">The Stemen–Netzley Family Tree</p>
+      <h1 id="picker-title">Who are you?</h1>
+      <p class="muted">Pick yourself and the tree will grow up from you, with every relationship worked out from your point of view.</p>
+      <div id="picker-suggested" class="picker-suggested"></div>
+      <div class="picker-search">
+        <label for="picker-input">Or search everyone in the tree</label>
+        <input id="picker-input" type="search" placeholder="Type a name…" autocomplete="off">
+        <ul id="picker-results" class="search-results inline"></ul>
+      </div>
+    </div>
+  </div>
+
+  <div id="settings" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+      <button id="settings-close" class="icon-btn modal-close" aria-label="Close">✕</button>
+      <h2 id="settings-title">Settings</h2>
+      <label class="toggle">
+        <input type="checkbox" id="show-living">
+        <span>Show details for living people</span>
+      </label>
+      <p class="muted small" id="living-note">Turn this off to hide living people's dates and details (for example, when showing the tree on a shared screen). Children are always shown by name only.</p>
+      <h3>This device</h3>
+      <p class="muted small">If you chose "Remember on this device," you can make it ask for the password again.</p>
+      <button class="btn btn-small" id="lock-device">Lock this device</button>
+      <h3>Share a link</h3>
+      <p class="muted small">Send a family member a link that opens the tree from their point of view.</p>
+      <div class="share-row">
+        <input id="share-link" type="text" readonly>
+        <button class="btn btn-small" id="copy-link">Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>
