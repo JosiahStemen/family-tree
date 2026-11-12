@@ -1047,6 +1047,13 @@
     }
     relBody += `<dt>Family line</dt><dd>${esc(cap(p.line || ''))}${p.line !== branchOf(id) ? ` <span class="muted">(${esc(LINE_LABEL[branchOf(id)] || branchOf(id))} side)</span>` : ''}</dd>`;
     if (sk[p.status]) relBody += `<dt>Status</dt><dd>${esc(sk[p.status])}</dd>`;
+    const ev = p.evidence;
+    if (ev && ((ev.supports && ev.supports.length) || ev.unproven)) {
+      relBody += `<dt>Evidence</dt><dd>`;
+      if (ev.supports && ev.supports.length) relBody += `<ul class="evidence-list">${ev.supports.map((s) => `<li>${esc(s)}</li>`).join('')}</ul>`;
+      if (ev.unproven) relBody += `<p class="muted evidence-gap"><strong>Not yet proven:</strong> ${esc(ev.unproven)}</p>`;
+      relBody += `</dd>`;
+    }
     relBody += `</dl>`;
     h += section('Relationship', relBody);
 

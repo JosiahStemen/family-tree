@@ -471,3 +471,7 @@ dl.facts-grid dd { margin: 0; }
   .editor-body h2 { font-size: 29px; }
   .ef-foot { flex-direction: column-reverse; align-items: stretch; }
 }
+/* evidence behind "likely" and "lead" people */
+.evidence-list { margin: 0 0 6px; padding-left: 1.1em; }
+.evidence-list li { margin: 2px 0; }
+.evidence-gap { margin: 4px 0 0; }
