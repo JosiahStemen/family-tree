@@ -28,7 +28,7 @@ function Event($date, $place) {
   if (-not $date -and -not $place) { return $null }
   $e = NewDict; $e['date'] = $date; $e['place'] = $place; return $e
 }
-$momSource = if ($specData.ContainsKey('sourceTitle')) { $specData['sourceTitle'] } else { 'Family Ancestry tree kept by Josiah''s mother (screenshot, Nov 2026)' }
+$momSource = if ($specData.ContainsKey('sourceTitle')) { $specData['sourceTitle'] } else { 'Netzley Stemen Family Tree on Ancestry' }
 
 # ---------- new people ----------
 foreach ($s in $specData['people']) {
