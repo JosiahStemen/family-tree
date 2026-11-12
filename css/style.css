@@ -22,6 +22,7 @@
   --line-wood: #9a7417;
   --line-ferguson: #b33f68;
   --line-cary: #5f7880;
+  --line-cramer: #2b7f7a;
   --line-both: #6b5a4b;
 
   --badge-likely-bg: #fbecc8;
@@ -58,6 +59,7 @@
     --line-wood: #d6ae4f;
     --line-ferguson: #e57ea2;
     --line-cary: #93adb4;
+    --line-cramer: #6cc3bd;
     --line-both: #b4a493;
     --badge-likely-bg: #4a3c14;
     --badge-likely-ink: #f1d58c;
@@ -71,7 +73,7 @@
   --ink: #efe7dc; --ink-2: #c4b8aa; --ink-3: #95897c; --rule: #3b342d; --rule-2: #4c433a;
   --accent: #d39b6a; --accent-ink: #1a1714; --focus: #e0a874; --connector: #5f554a;
   --line-stemen: #74a9d6; --line-netzley: #e08b62; --line-hesser: #ad92dc; --line-brooks: #74c48e;
-  --line-wood: #d6ae4f; --line-ferguson: #e57ea2; --line-cary: #93adb4; --line-both: #b4a493;
+  --line-wood: #d6ae4f; --line-ferguson: #e57ea2; --line-cary: #93adb4; --line-cramer: #6cc3bd; --line-both: #b4a493;
   --badge-likely-bg: #4a3c14; --badge-likely-ink: #f1d58c; --badge-lead-bg: #4d2620; --badge-lead-ink: #f3b3a6;
   color-scheme: dark;
 }

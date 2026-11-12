@@ -7,9 +7,10 @@
   const MAJOR_LINES = ['stemen', 'netzley', 'hesser', 'brooks', 'wood', 'ferguson'];
   const LINE_LABEL = {
     stemen: 'Stemen', netzley: 'Netzley', hesser: 'Hesser', brooks: 'Brooks', wood: 'Wood',
-    ferguson: 'Ferguson', cary: 'Cary', both: 'Stemen & Netzley'
+    ferguson: 'Ferguson', cary: 'Cary', cramer: "Cramer (Alivia's family)", both: 'Stemen & Netzley'
   };
   const MINORS = ['meadow-cary'];
+  const SIDE_LINES = ['cary', 'cramer']; // in-law families with their own colour
   const CARD_W = 176, CARD_H = 112, SLOT = 192, ROW_H = 160;
   const PAD_T = 46, PAD_B = 40, PAD_L = 170, PAD_R = 60;
   const LS = {
@@ -166,7 +167,7 @@
   function computeBranchDown(id) {
     const p = P(id);
     if (!p) return 'both';
-    if (MAJOR_LINES.includes(p.line) || p.line === 'both' || p.line === 'cary') return p.line;
+    if (MAJOR_LINES.includes(p.line) || p.line === 'both' || SIDE_LINES.includes(p.line)) return p.line;
     // Walk down through children until we reach a person on a major line.
     const seen = new Set([id]);
     let frontier = [id];
@@ -177,7 +178,7 @@
           if (seen.has(c)) continue;
           seen.add(c);
           const cl = P(c).line;
-          if (MAJOR_LINES.includes(cl)) return cl;
+          if (MAJOR_LINES.includes(cl) || SIDE_LINES.includes(cl)) return cl;
           next.push(c);
         }
       }
@@ -948,7 +949,7 @@
       if (!groups[b]) groups[b] = new Set();
       if (p.line && p.line !== b && !MAJOR_LINES.includes(p.line)) groups[b].add(p.line);
     });
-    const order = MAJOR_LINES.concat(['cary', 'both']).filter((b) => groups[b]);
+    const order = MAJOR_LINES.concat(SIDE_LINES, ['both']).filter((b) => groups[b]);
     const items = order.map((b) => {
       const subs = [...groups[b]].map(cap).join(', ');
       return `<span class="legend-item"><span class="legend-swatch" style="background:var(--line-${b})"></span>` +
